@@ -2,6 +2,14 @@
 
 手机上的 DSH 聊天客户端，通过 ngrok 隧道连到你电脑上跑的 DSH 服务。
 
+## 📥 下载安装包
+
+**[⬇ Elysia_dsh-v1.0.apk](https://github.com/yy1234567890-09876543q/Elysia_dsh/releases/latest)**
+
+> Android 8.0（API 26）及以上。首次安装需要允许「安装未知来源应用」。
+
+装好 App 后，按下面的「一、第一次用」把电脑那边准备好，再在 App 设置里填地址就能连上啦。
+
 ---
 
 ## 一、第一次用（按顺序来）

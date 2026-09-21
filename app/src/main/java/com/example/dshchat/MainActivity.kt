@@ -1401,6 +1401,12 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
     var url by remember { mutableStateOf(vm.serverBase) }
     var previewTick by remember { mutableStateOf(0) }
 
+    // 局域网直连（dsh-mobile 网关）的配对输入
+    var lanHost by remember {
+        mutableStateOf(vm.lanOrigin?.removePrefix("https://")?.substringBefore(':') ?: "")
+    }
+    var lanKey by remember { mutableStateOf("") }
+
     // 进设置页就顺手探一次认证状态
     LaunchedEffect(Unit) { vm.refreshAuth() }
 
@@ -1560,6 +1566,71 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 }
                 vm.authHint?.let {
                     Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+
+            // ---------- 局域网直连（不用数据线）----------
+            Section("局域网直连（不用数据线）") {
+                Text(
+                    "在电脑上打开 DSH 左下角「移动访问 → 局域网」，点「生成并复制密钥」，" +
+                        "把密钥粘到下面，再填上电脑的局域网 IP（如 192.168.1.3），就能连上啦",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = lanHost,
+                    onValueChange = { lanHost = it },
+                    label = { Text("电脑地址", fontSize = 13.sp) },
+                    placeholder = { Text("192.168.1.3", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = lanKey,
+                    onValueChange = { lanKey = it },
+                    label = { Text("配对密钥", fontSize = 13.sp) },
+                    placeholder = { Text("dsh1.……", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        enabled = !vm.lanWorking,
+                        onClick = {
+                            vm.pairLan(lanKey, lanHost)
+                            lanKey = ""
+                        }
+                    ) {
+                        if (vm.lanWorking) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("配对并连接")
+                        }
+                    }
+                    TextButton(
+                        enabled = vm.lanOrigin != null && !vm.lanWorking,
+                        onClick = { vm.forgetLan() }
+                    ) { Text("忘掉这台电脑") }
+                }
+                Text(
+                    (if (vm.lanOrigin != null) "🟢 " else "⚪ ") + vm.lanStatus,
+                    fontSize = 12.sp,
+                    color = if (vm.lanOrigin != null) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline
+                )
+                if (vm.lanDeviceExpiresAt > 0L) {
+                    Text(
+                        "配对有效期至 " + formatTime(vm.lanDeviceExpiresAt),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
 

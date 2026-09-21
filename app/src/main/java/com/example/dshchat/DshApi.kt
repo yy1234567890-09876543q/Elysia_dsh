@@ -232,9 +232,57 @@ object DshApi {
 
     /** 给请求带上这个地址的 cookie（有的话） */
     private fun Request.Builder.withAuth(base: String): Request.Builder {
+        val gw = activeGateway
+        if (gw != null && normalizeBase(base) == normalizeBase(gw.origin)) {
+            // dsh-mobile 网关：会话 cookie + 网关强制的 Origin 头
+            addHeader("Cookie", "dsh_ma_session=${gw.sessionToken}")
+            addHeader("Origin", gw.origin)
+            addHeader("Sec-Fetch-Site", "same-origin")
+            return this
+        }
         authCookie(base)?.let { addHeader("Cookie", it) }
         return this
     }
+
+    //#region dsh-mobile 网关
+
+    /** 当前生效的网关会话（为空 = 直连 DSH 本机口） */
+    @Volatile
+    private var activeGateway: GatewaySession? = null
+
+    /** 固定了网关 CA 的 OkHttp 客户端 */
+    @Volatile
+    private var gatewayClient: OkHttpClient? = null
+
+    val gateway: GatewaySession? get() = activeGateway
+
+    /** 切到网关模式：之后对该地址的请求会带会话与 Origin，并走固定的 CA 校验 */
+    fun useGateway(session: GatewaySession, caDer: ByteArray) {
+        activeGateway = session
+        gatewayClient = PinnedTls.pinnedClient(caDer)
+    }
+
+    /** 只换会话（续期时用），不动 TLS 配置 */
+    fun updateGatewaySession(session: GatewaySession) {
+        if (activeGateway?.origin == session.origin) activeGateway = session
+    }
+
+    fun clearGateway() {
+        activeGateway = null
+        gatewayClient = null
+    }
+
+    /** 某个 base 该用哪个客户端 */
+    private fun clientFor(base: String): OkHttpClient {
+        val gw = activeGateway
+        return if (gw != null && normalizeBase(base) == normalizeBase(gw.origin)) {
+            gatewayClient ?: client
+        } else {
+            client
+        }
+    }
+
+    //#endregion
 
     /**
      * 用户很可能直接把 `dsh web` 打印的那一整条地址粘进来（尾巴带 `?token=`）。
@@ -337,7 +385,7 @@ object DshApi {
                 .post(body.toRequestBody(JSON_MEDIA))
                 .build()
 
-            val envelope: JSONObject = client.newCall(req).execute().use { resp ->
+            val envelope: JSONObject = clientFor(base).newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     throw IOException("HTTP ${resp.code}: ${raw.take(300)}")
@@ -892,7 +940,7 @@ object DshApi {
             .withAuth(base)
             .build()
 
-        return client.newWebSocket(req, object : WebSocketListener() {
+        return clientFor(base).newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val openMsg = JSONObject().apply {
                     put("type", "open")

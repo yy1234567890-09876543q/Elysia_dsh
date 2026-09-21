@@ -100,6 +100,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs =
         application.getSharedPreferences("dsh_settings", Context.MODE_PRIVATE)
 
+    /** deviceToken 的安全存储（Keystore 加密）。必须声明在 init 之前 */
+    private val gatewayStore = GatewayStore(application)
+
+    // 局域网直连的状态 —— 这些必须声明在 init 之前，否则 init 里赋值会 NPE
+    var lanStatus by mutableStateOf("未配对")
+        private set
+    var lanWorking by mutableStateOf(false)
+        private set
+    var lanOrigin by mutableStateOf<String?>(null)
+        private set
+    var lanDeviceExpiresAt by mutableStateOf(0L)
+        private set
+
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
 
@@ -368,7 +381,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             soundMode = SoundMode.of(prefs.getString("notify_sound_mode", null)),
             notifySoundUri = prefs.getString("notify_sound_uri", null)
         )
-        loadSessions()
+        // 有局域网配对凭据就先续期再连（省得先报一次 401），否则直接连。
+        if (gatewayStore.load() != null) restoreLan() else loadSessions()
     }
 
     private fun newId(): Long = nextId.incrementAndGet()
@@ -418,6 +432,131 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSoundUri(uri: String?) =
         applyUi { it.copy(soundMode = SoundMode.CUSTOM, notifySoundUri = uri) }
+
+    //#endregion
+
+    //#region 局域网直连（dsh-mobile 网关）
+
+    private fun updateLanStatus(text: String) {
+        lanStatus = text
+    }
+
+    /**
+     * 启动时恢复局域网连接：有凭据就续一次会话再切过去。
+     * 恢复失败不影响 App 用别的方式连（会给出提示）。
+     */
+    fun restoreLan() {
+        val stored = gatewayStore.load() ?: return
+        lanOrigin = stored.origin
+        lanDeviceExpiresAt = stored.deviceExpiresAt
+        val origin = GatewayOrigin.parse(stored.origin) ?: return
+        viewModelScope.launch {
+            lanWorking = true
+            try {
+                val session = GatewayAuthClient.renew(origin, stored.deviceToken, stored.caDer)
+                DshApi.useGateway(session, stored.caDer)
+                serverBase = stored.origin
+                prefs.edit().putString("server_base", stored.origin).apply()
+                updateLanStatus("已连接（${origin.host}）")
+                loadSessions()
+            } catch (e: Exception) {
+                DshApi.clearGateway()
+                updateLanStatus("连接已失效：${e.message ?: "未知原因"}")
+                _messages.value = listOf(
+                    ChatMessage(
+                        newId(), MsgKind.SYSTEM,
+                        "⚠️ 局域网直连失效了（${e.message ?: "未知原因"}）\n去设置里重新配对一次就好~"
+                    )
+                )
+            } finally {
+                lanWorking = false
+            }
+        }
+    }
+
+    /**
+     * 用配对密钥 + 电脑地址完成配对，然后切到局域网直连。
+     *
+     * @param rawKey  形如 `dsh1.<64位实例ID>.<43位令牌>`；也接受直接粘整条配对链接
+     * @param rawHost 电脑地址，如 `192.168.1.3`（端口可省略，默认 3443）
+     */
+    fun pairLan(rawKey: String, rawHost: String) {
+        if (lanWorking) return
+        // 允许用户把整条配对链接粘进密钥框
+        val keyText = Regex("dsh1\\.[a-f0-9]{64}\\.[A-Za-z0-9_-]{43}").find(rawKey)?.value
+        val key = keyText?.let { PairingKey.parse(it) }
+        if (key == null) {
+            _toast.value = GatewayAuthError.KeyInvalid.message
+            return
+        }
+        val hostText = rawHost.trim().ifBlank {
+            Regex("https?://[^/\\s\"']+").find(rawKey)?.value.orEmpty()
+        }
+        val origin = GatewayOrigin.parse(hostText)
+        if (origin == null) {
+            _toast.value = "电脑地址填一下呀，比如 192.168.1.3"
+            return
+        }
+
+        viewModelScope.launch {
+            lanWorking = true
+            updateLanStatus("正在连接 ${origin.host} …")
+            try {
+                // ① 发现：确认能连上，并核对实例ID
+                val discovery = GatewayAuthClient.fetchDiscovery(origin)
+                val advertised = discovery.optString("instanceId", "")
+                if (advertised.isNotEmpty() && advertised != key.instanceId) {
+                    throw GatewayAuthError.CaMismatch
+                }
+                // ② 取 CA 并做指纹绑定
+                updateLanStatus("正在校验证书指纹…")
+                val caDer = GatewayAuthClient.fetchCa(origin)
+                if (!PinnedTls.validateCa(caDer, key.instanceId)) {
+                    throw GatewayAuthError.CaMismatch
+                }
+                // ③ 配对
+                updateLanStatus("正在配对…")
+                val session = GatewayAuthClient.pair(origin, key, "Elysia_dsh", caDer)
+                if (session.instanceId != key.instanceId) throw GatewayAuthError.CaMismatch
+
+                // ④ 落盘 + 切换
+                gatewayStore.save(session, caDer)
+                DshApi.useGateway(session, caDer)
+                lanOrigin = session.origin
+                lanDeviceExpiresAt = session.deviceExpiresAt ?: 0L
+                serverBase = session.origin
+                addresses = AddressBook.push(addresses, session.origin)
+                prefs.edit()
+                    .putString("server_base", session.origin)
+                    .putString("address_book", AddressBook.save(addresses))
+                    .apply()
+                updateLanStatus("已连接（${origin.host}）")
+                _toast.value = "配对成功~ 现在不用连数据线啦♪"
+                loadSessions()
+                refreshAuth()
+            } catch (e: GatewayAuthError) {
+                DshApi.clearGateway()
+                updateLanStatus("配对失败：${e.message}")
+                _toast.value = e.message
+            } catch (e: Exception) {
+                DshApi.clearGateway()
+                updateLanStatus("配对失败：${e.message ?: "未知原因"}")
+                _toast.value = "配对失败：${e.message ?: "未知原因"}"
+            } finally {
+                lanWorking = false
+            }
+        }
+    }
+
+    /** 忘掉这台电脑的配对（电脑端仍保留设备记录，可在那边撤销） */
+    fun forgetLan() {
+        gatewayStore.clear()
+        DshApi.clearGateway()
+        lanOrigin = null
+        lanDeviceExpiresAt = 0L
+        updateLanStatus("未配对")
+        _toast.value = "已忘掉这台电脑，需要时重新配对就好~"
+    }
 
     //#endregion
 

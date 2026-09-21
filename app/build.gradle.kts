@@ -19,6 +19,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // 不额外生成发布密钥，继续用本机 debug keystore 签名，
+            // 这样已经装了 v1.0 的用户可以直接覆盖安装（签名一致）。
+            signingConfig = signingConfigs.getByName("debug")
+            // 但发布包必须是不可调试的：否则任何拿到手机的人都能用 adb 挂上去看数据。
+            isDebuggable = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -399,12 +399,6 @@ object DshApi {
 
             val envelope: JSONObject = clientFor(base).newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
-                android.util.Log.d(
-                    "DshApi",
-                    "rpc $method -> ${resp.code}  url=${req.url}  origin=${req.header("Origin")}  " +
-                        "cookie=${req.header("Cookie")?.take(28)}  host=${req.header("Host")}  " +
-                        "gw=${activeGateway != null}  body=${raw.take(120)}"
-                )
                 if (!resp.isSuccessful) {
                     throw IOException("HTTP ${resp.code}: ${raw.take(300)}")
                 }

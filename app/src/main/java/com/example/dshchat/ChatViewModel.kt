@@ -619,10 +619,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadSessions() {
         viewModelScope.launch {
-            android.util.Log.d("DshApi", "loadSessions 开始 base=$serverBase")
             try {
                 val list = DshApi.listSessions(serverBase)
-                android.util.Log.d("DshApi", "loadSessions 拿到 ${list.size} 个会话")
                 _sessions.value = list
                 if (list.isEmpty()) {
                     // 全新的服务器（或者刚认证完第一次连上）

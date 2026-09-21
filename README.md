@@ -4,7 +4,7 @@
 
 ## 📥 下载安装包
 
-**[⬇ Elysia_dsh-v1.1.apk](https://github.com/yy1234567890-09876543q/Elysia_dsh/releases/latest)**
+**[⬇ Elysia_dsh-v1.0.apk](https://github.com/yy1234567890-09876543q/Elysia_dsh/releases/latest)**
 
 > Android 8.0（API 26）及以上。首次安装需要允许「安装未知来源应用」。
 
@@ -45,12 +45,12 @@ App 本身不偷数据、不做统计上报、不存储任何密码，权限只�
 
 ---
 
-## 二、认证（v1.1 新增，用隧道时**必看**）
+## 二、认证（用隧道时**必看**）
 
 DSH 默认就带认证：`dsh web` 启动时会打印一条**带令牌的地址**，用它换一张
 **30 天有效**的签名凭证，之后所有请求都要带上这张凭证。
 
-App 从 v1.1 开始原生支持这套流程，**所以你不需要再装 `dsh-local-no-auth`
+App 原生支持这套流程，**所以你不需要再装 `dsh-local-no-auth`
 那种「关掉认证」的插件了**。
 
 ### 怎么用（超简单）

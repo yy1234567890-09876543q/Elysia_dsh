@@ -108,6 +108,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -1401,6 +1403,11 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
     var url by remember { mutableStateOf(vm.serverBase) }
     var previewTick by remember { mutableStateOf(0) }
 
+    // 地址 / 令牌 分开填，默认都遮蔽起来（点「显示」能看一眼）
+    var tokenInput by remember { mutableStateOf("") }
+    var urlVisible by remember { mutableStateOf(false) }
+    var tokenVisible by remember { mutableStateOf(false) }
+
     // 局域网直连（dsh-mobile 网关）的配对输入
     var lanHost by remember {
         mutableStateOf(vm.lanOrigin?.removePrefix("https://")?.substringBefore(':') ?: "")
@@ -1502,19 +1509,46 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("DSH 服务地址") },
-                    placeholder = { Text("http://127.0.0.1:3080 或 ngrok 地址") },
+                    label = { Text("DSH 服务地址", fontSize = 13.sp) },
+                    placeholder = { Text("https://xxxx.ngrok-free.dev", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    visualTransformation = if (urlVisible) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { urlVisible = !urlVisible }) {
+                            Text(if (urlVisible) "隐藏" else "显示", fontSize = 11.sp)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it },
+                    label = { Text("访问令牌", fontSize = 13.sp) },
+                    placeholder = { Text("粘令牌，或整条 dsh web 地址", fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    visualTransformation = if (tokenVisible) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { tokenVisible = !tokenVisible }) {
+                            Text(if (tokenVisible) "隐藏" else "显示", fontSize = 11.sp)
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "可以直接把 `dsh web` 打印的整条地址（带 ?token= 的那种）粘进来，" +
-                        "App 会自动换成 30 天有效的凭证，再把干净的地址存好",
+                    "地址只填域名那一段；令牌可以直接把 `dsh web` 打印的整条地址粘进来" +
+                        "（App 只取 ?token= 那部分，套用到上面的地址上）",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
-                        vm.saveBase(url.trim())
+                        vm.saveBase(url.trim(), tokenInput.trim())
+                        tokenInput = ""
                         Toast.makeText(context, "正在连接…", Toast.LENGTH_SHORT).show()
                     }) { Text("保存并连接") }
                     TextButton(onClick = { vm.refreshAuth() }) { Text("检查认证") }

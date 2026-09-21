@@ -183,6 +183,12 @@ object PinnedTls {
             // CA 已经固定了，链上只可能是我们自己的网关；
             // 再叠一层主机名校验反而会被自签证书的 SAN 写法坑到，这里放行。
             .hostnameVerifier { _, _ -> true }
+            // 调试用：把实际发出的每个头打出来（排查 403 用）
+            .addInterceptor { chain ->
+                val r = chain.request()
+                android.util.Log.d("DshApi", "→ ${r.method} ${r.url}\n${r.headers}")
+                chain.proceed(r)
+            }
             .build()
     }
 

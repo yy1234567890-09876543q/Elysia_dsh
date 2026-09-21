@@ -381,8 +381,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             soundMode = SoundMode.of(prefs.getString("notify_sound_mode", null)),
             notifySoundUri = prefs.getString("notify_sound_uri", null)
         )
-        // 有局域网配对凭据就先续期再连（省得先报一次 401），否则直接连。
-        if (gatewayStore.load() != null) restoreLan() else loadSessions()
+        // 有局域网配对凭据、而且当前选的就是它 → 先续期再连（省得先报一次 401），否则直接连。
+        if (gatewayStore.load() != null && prefs.getBoolean("lan_active", true)) restoreLan() else loadSessions()
     }
 
     private fun newId(): Long = nextId.incrementAndGet()
@@ -529,6 +529,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.edit()
                     .putString("server_base", session.origin)
                     .putString("address_book", AddressBook.save(addresses))
+                    .putBoolean("lan_active", true)
                     .apply()
                 updateLanStatus("已连接（${origin.host}）")
                 _toast.value = "配对成功~ 现在不用连数据线啦♪"
@@ -552,6 +553,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun forgetLan() {
         gatewayStore.clear()
         DshApi.clearGateway()
+        prefs.edit().putBoolean("lan_active", false).apply()
         lanOrigin = null
         lanDeviceExpiresAt = 0L
         updateLanStatus("未配对")
@@ -565,17 +567,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 保存访问地址：当前生效 + 记进历史。
      *
-     * 如果粘进来的是 `dsh web` 打印的**整条地址**（尾巴带 `?token=`），
-     * 会先拿它换一张 30 天有效的签名 cookie，再把**干净的**地址存下来 ——
-     * 这样历史里不会塞满一次性令牌，认证也不用每次都重来。
+     * 令牌可以两种方式给：
+     *  - 直接拼在地址里（`http://127.0.0.1:3080/?token=XXX`）
+     *  - 或者走 [rawToken] 这个独立入参：整条地址、或者裸令牌都认
+     *
+     * 拿到令牌后会换一张 30 天有效的签名 cookie，只把**干净的地址**存下来 ——
+     * 历史里不会塞满一次性令牌，认证也不用每次都重来。
      */
-    fun saveBase(url: String) {
-        val (clean, token) = DshApi.splitTokenUrl(url)
+    fun saveBase(url: String, rawToken: String? = null) {
+        val (clean, addrToken) = DshApi.splitTokenUrl(url)
+        val token = addrToken ?: rawToken?.let { DshApi.extractToken(it) }
         if (clean.isEmpty()) return
         viewModelScope.launch {
             if (token != null) {
                 authHint = "正在用令牌换凭证…"
                 applyToken(clean, token)
+            }
+            // 手动填了别的地址 → 说明不用局域网直连了，别让它在下次启动时又切回去
+            val gwOrigin = DshApi.gateway?.origin
+            if (gwOrigin != null && DshApi.normalizeBase(gwOrigin) != DshApi.normalizeBase(clean)) {
+                DshApi.clearGateway()
+                prefs.edit().putBoolean("lan_active", false).apply()
+                updateLanStatus("已停用（当前用 ${clean} ）")
             }
             serverBase = clean
             addresses = AddressBook.push(addresses, clean)
@@ -606,8 +619,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadSessions() {
         viewModelScope.launch {
+            android.util.Log.d("DshApi", "loadSessions 开始 base=$serverBase")
             try {
                 val list = DshApi.listSessions(serverBase)
+                android.util.Log.d("DshApi", "loadSessions 拿到 ${list.size} 个会话")
                 _sessions.value = list
                 if (list.isEmpty()) {
                     // 全新的服务器（或者刚认证完第一次连上）

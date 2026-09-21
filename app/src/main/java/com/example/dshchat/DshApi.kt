@@ -305,6 +305,18 @@ object DshApi {
     }
 
     /**
+     * 从用户输入里抠出访问令牌。两种写法都认：
+     *  - 整条地址：`http://127.0.0.1:3080/?token=XXX`（或 ngrok 域名那条）→ 取 `token=`
+     *  - 裸令牌：`Xk9vQ2m...`（DSH 的启动令牌是 32 字节 base64url，43 个字符）
+     */
+    fun extractToken(raw: String): String? {
+        val t = raw.trim()
+        if (t.isEmpty()) return null
+        splitTokenUrl(t).second?.let { return it }
+        return t.takeIf { it.length in 8..512 && Regex("^[A-Za-z0-9_-]+$").matches(it) }
+    }
+
+    /**
      * 用启动令牌换一张签名 cookie —— 这就是 DSH 官方的浏览器认证握手。
      *
      * 上游行为（dsh-client-connection/lib/browser-auth.js）：
@@ -387,6 +399,12 @@ object DshApi {
 
             val envelope: JSONObject = clientFor(base).newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
+                android.util.Log.d(
+                    "DshApi",
+                    "rpc $method -> ${resp.code}  url=${req.url}  origin=${req.header("Origin")}  " +
+                        "cookie=${req.header("Cookie")?.take(28)}  host=${req.header("Host")}  " +
+                        "gw=${activeGateway != null}  body=${raw.take(120)}"
+                )
                 if (!resp.isSuccessful) {
                     throw IOException("HTTP ${resp.code}: ${raw.take(300)}")
                 }

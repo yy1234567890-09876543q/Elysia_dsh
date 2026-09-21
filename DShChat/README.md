@@ -1,4 +1,7 @@
-# DShChat — 安卓端 DSH 聊天客户端（Kotlin + Jetpack Compose）
+# Elysia_dsh — 安卓端 DSH 聊天客户端（Kotlin + Jetpack Compose）
+
+> ⚠️ **这份是早期原型的开发笔记，内容已经过时**（那时只有轮询、会话还是写死的）。
+> 现行的使用说明请看仓库根目录的 [`README.md`](../README.md)。
 
 通过 DSH **JSON-RPC 本地接口**（`dsh web`，默认 `http://127.0.0.1:3080`）发消息并轮询回复。
 协议依据你自己的 `dsh_api.py` 实现，不是 OpenAI 兼容接口。
@@ -25,7 +28,7 @@ POST {base}/api/<method>
 - 设置里只改 base 地址（模拟器/真机/穿透），并自动保存
 
 ## 一、打开项目
-1. Android Studio → File → Open → 选桌面 `DShChat` 文件夹
+1. Android Studio → File → Open → 选桌面 `Elysia_dsh` 文件夹
 2. 首次同步需联网下依赖，等完成后点 ▶ 运行
 
 ## 二、DSH 侧准备
@@ -53,7 +56,7 @@ dsh web
 
 ## 项目结构
 ```
-DShChat/
+Elysia_dsh/
 ├── settings.gradle.kts / build.gradle.kts / gradle.properties
 ├── app/
 │   ├── build.gradle.kts                 # Compose + OkHttp

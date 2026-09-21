@@ -1,9 +1,12 @@
-# Android build
+# Android 构建产物
 app/build/
 build/
 .gradle/
 .kotlin/
 local.properties
+
+# IDE 配置（含本机路径和设备序列号，不入库）
+.idea/
 
 # ngrok：程序太大；ngrok.yml 里含 authtoken，绝不提交
 ngrok.exe

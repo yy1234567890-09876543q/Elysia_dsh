@@ -839,6 +839,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _isSending.value = true
         activeAssistantId = null
         activeThinkingId = null
+        // 起前台服务保活：不然 App 一挂后台，安卓就把进程冻了，连接断掉、完成信号收不到
+        TurnWatchService.start(getApplication())
 
         viewModelScope.launch {
             var ws: WebSocket? = null
@@ -895,6 +897,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     loadHistory()
                 }
                 notifyDone(failure)
+                // 通知发完了再撤掉保活服务，顺序反了的话进程可能先被冻住
+                TurnWatchService.stop(getApplication())
             }
         }
     }
@@ -1060,17 +1064,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val id = channelId()
         val want = desiredSound()
 
-        // 清掉别的声音配置留下的旧渠道
-        nm.notificationChannels?.forEach { existing ->
-            if (existing.id.startsWith(NOTIFY_CHANNEL_PREFIX) && existing.id != id) {
-                nm.deleteNotificationChannel(existing.id)
+        // 清掉别的声音配置留下的旧渠道。
+        // 注意：正在被前台服务使用的频道禁止删除，删它会抛 SecurityException，
+        // 所以这里必须兜住 —— 清理只是尽力而为，失败了不能影响发通知。
+        runCatching {
+            nm.notificationChannels?.forEach { existing ->
+                if (existing.id.startsWith(NOTIFY_CHANNEL_PREFIX) && existing.id != id) {
+                    nm.deleteNotificationChannel(existing.id)
+                }
             }
         }
 
         val current = nm.getNotificationChannel(id)
         if (current != null && current.sound != want) {
             // 声音改不了，只能删了重建
-            nm.deleteNotificationChannel(id)
+            runCatching { nm.deleteNotificationChannel(id) }
         }
 
         if (nm.getNotificationChannel(id) == null) {

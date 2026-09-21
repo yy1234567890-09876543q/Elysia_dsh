@@ -9,6 +9,9 @@
     <!-- 任务完成通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 等回复期间保活：安卓会冻结后台进程，没前台服务就收不到完成信号 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:allowBackup="true"
@@ -29,6 +32,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 等回复期间的前台服务：让进程不被系统冻结，完成时才能发通知 -->
+        <service
+            android:name=".TurnWatchService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 自定义铃声兜底：把 App 私有目录里的音频用 content:// 暴露给系统 -->
         <provider

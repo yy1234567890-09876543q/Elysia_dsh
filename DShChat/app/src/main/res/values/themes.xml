@@ -1,0 +1,6 @@
+<resources>
+    <!-- Compose 应用使用无 ActionBar 的 Material 主题即可 -->
+    <style name="Theme.DShChat" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>

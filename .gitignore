@@ -1,0 +1,14 @@
+# Android build
+app/build/
+build/
+.gradle/
+.kotlin/
+local.properties
+
+# ngrok：程序太大；ngrok.yml 里含 authtoken，绝不提交
+ngrok.exe
+ngrok.yml
+
+# 其他
+.DS_Store
+*.log

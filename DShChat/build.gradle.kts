@@ -1,0 +1,6 @@
+// 顶层构建文件：声明插件版本，供 app 模块使用
+plugins {
+    id("com.android.application") version "8.5.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false
+}

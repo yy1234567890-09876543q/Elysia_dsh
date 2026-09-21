@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- App 私有 files/ 目录，用于把自定义铃声交给系统读取 -->
+    <files-path name="files" path="." />
+</paths>

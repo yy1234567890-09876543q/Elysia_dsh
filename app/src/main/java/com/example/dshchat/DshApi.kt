@@ -16,7 +16,9 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.net.Proxy
+import java.net.URLEncoder
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /** 一个 DSH 会话 */
@@ -59,6 +61,39 @@ data class CreatedSession(
     /** 服务端最终解析出来的预设 id（没指定时就是默认那个） */
     val agentPreset: String? = null
 )
+
+/** 用「启动令牌」换浏览器会话 cookie 的结果 */
+sealed class TokenExchange {
+    /** 换到了，[cookie] 是 `名字=值` 那一截 */
+    data class Ok(val cookie: String) : TokenExchange()
+
+    /** 服务端根本没开认证（装了 dsh-local-no-auth 就是这种） */
+    object NoAuthRequired : TokenExchange()
+
+    /** 服务端要求认证，但这张令牌不认（过期了？抄漏了？） */
+    object Rejected : TokenExchange()
+
+    /** 连不上 / 其它错误 */
+    data class Failed(val message: String) : TokenExchange()
+}
+
+/** 当前地址的认证状态 */
+enum class AuthState {
+    /** 还没探过 */
+    UNKNOWN,
+
+    /** 服务端不要求认证 —— 说明它只绑了 loopback，或者装了免认证插件 */
+    NOT_REQUIRED,
+
+    /** 已认证（手里有一张能用的 cookie） */
+    AUTHENTICATED,
+
+    /** 服务端要求认证，但我们没有（或已失效）—— 要粘贴带 token 的地址 */
+    NEEDS_TOKEN,
+
+    /** 连不上 */
+    OFFLINE
+}
 
 /** 事件类型（用于 UI 分色显示） */
 enum class EventType { THINKING, REPLY, TOOL_CALL, CONTEXT }
@@ -140,6 +175,9 @@ object DshApi {
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
+    /** DSH 写入的浏览器会话 cookie 前缀（client-connection/browser-auth.js） */
+    private const val COOKIE_PREFIX = "dsh-auth-"
+
     private val client = OkHttpClient.Builder()
         .proxy(Proxy.NO_PROXY)
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -147,6 +185,138 @@ object DshApi {
         .pingInterval(20, TimeUnit.SECONDS)
         .protocols(listOf(Protocol.HTTP_1_1))
         .build()
+
+    /**
+     * 换令牌专用：**不跟随重定向**。
+     * 上游的 `?token=` 握手靠的就是一个 303 + Set-Cookie，
+     * 跟过去的话（OkHttp 默认不存 cookie）只会撞上 401。
+     */
+    private val authClient = client.newBuilder()
+        .followRedirects(false)
+        .build()
+
+    /**
+     * 认证 cookie，按 base 地址分开存。
+     *
+     * 为什么不用 OkHttp 的 CookieJar：cookie 名是服务端按 **authority**
+     * （host:port）算出来的（`dsh-auth-<sha256(authority)>`），
+     * 而我们要把同一个地址的 cookie 持久化到 SharedPreferences 里。
+     * 自己拿字符串保管最简单也最可控。
+     */
+    private val authCookies = ConcurrentHashMap<String, String>()
+
+    /** base 归一化：去空格、去尾斜杠 —— 用作 cookie 的键 */
+    fun normalizeBase(base: String): String = base.trim().trimEnd('/')
+
+    /** 给某个地址装上认证 cookie（传 null / 空串 = 清掉） */
+    fun setAuthCookie(base: String, cookie: String?) {
+        val key = normalizeBase(base)
+        if (key.isEmpty()) return
+        if (cookie.isNullOrBlank()) authCookies.remove(key) else authCookies[key] = cookie
+    }
+
+    /** 查某个地址的 cookie */
+    fun authCookie(base: String): String? = authCookies[normalizeBase(base)]
+
+    /** 导出全部 cookie（给 SharedPreferences 持久化用） */
+    fun exportCookies(): Map<String, String> = HashMap(authCookies)
+
+    /** 导入全部 cookie（启动时从 SharedPreferences 恢复） */
+    fun importCookies(map: Map<String, String>) {
+        authCookies.clear()
+        for ((k, v) in map) {
+            val key = normalizeBase(k)
+            if (key.isNotEmpty() && v.isNotBlank()) authCookies[key] = v
+        }
+    }
+
+    /** 给请求带上这个地址的 cookie（有的话） */
+    private fun Request.Builder.withAuth(base: String): Request.Builder {
+        authCookie(base)?.let { addHeader("Cookie", it) }
+        return this
+    }
+
+    /**
+     * 用户很可能直接把 `dsh web` 打印的那一整条地址粘进来（尾巴带 `?token=`）。
+     * 这里把它拆成「干净的 base」+「令牌」两半。
+     * 没有 token 参数时令牌为 null。
+     */
+    fun splitTokenUrl(raw: String): Pair<String, String?> {
+        val t = raw.trim()
+        val q = t.indexOf('?')
+        if (q < 0) return normalizeBase(t) to null
+        val base = normalizeBase(t.substring(0, q))
+        var token: String? = null
+        for (kv in t.substring(q + 1).split('&')) {
+            val i = kv.indexOf('=')
+            if (i > 0 && kv.substring(0, i).trim() == "token") {
+                token = kv.substring(i + 1).trim().ifBlank { null }
+            }
+        }
+        return base to token
+    }
+
+    /**
+     * 用启动令牌换一张签名 cookie —— 这就是 DSH 官方的浏览器认证握手。
+     *
+     * 上游行为（dsh-client-connection/lib/browser-auth.js）：
+     * ```
+     * GET /?token=<每进程随机 32 字节>   且 Host 匹配
+     *   → 303 Location: /  +  Set-Cookie: dsh-auth-<sha256(authority)>=v1.<body>.<sig>
+     *                        HttpOnly; SameSite=Strict; Max-Age=30 天
+     * ```
+     * 以后每个请求带上这张 cookie 就能过 `/api` 的认证闸门。
+     * 交换密钥存在服务端 `.credentials.yaml` 里，**跨重启不变**，
+     * 所以 cookie 能撑满 30 天，即使 `dsh web` 重启过也一样有效。
+     *
+     * @param base  DSH 服务地址（不带 `?token=`）
+     * @param token 启动令牌
+     */
+    suspend fun exchangeToken(base: String, token: String): TokenExchange =
+        withContext(Dispatchers.IO) {
+            val b = normalizeBase(base)
+            val url = "$b/?token=" + URLEncoder.encode(token, "UTF-8")
+            val req = Request.Builder()
+                .url(url)
+                .addHeader("ngrok-skip-browser-warning", "true")
+                .get()
+                .build()
+            try {
+                authClient.newCall(req).execute().use { resp ->
+                    val raw = resp.headers("Set-Cookie")
+                        .firstOrNull { it.startsWith(COOKIE_PREFIX) }
+                    if (raw != null) {
+                        val pair = raw.substringBefore(';').trim()
+                        if (pair.isNotEmpty()) return@withContext TokenExchange.Ok(pair)
+                    }
+                    // 没拿到 cookie，只能按状态码判因
+                    when (resp.code) {
+                        401 -> TokenExchange.Rejected
+                        200 -> TokenExchange.NoAuthRequired
+                        else -> TokenExchange.Failed("HTTP ${resp.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                TokenExchange.Failed(e.message ?: "连接失败")
+            }
+        }
+
+    /**
+     * 探一下这个地址的认证状态。
+     * 判据很朴素：打一个最轻的 RPC，看会不会吃 401。
+     */
+    suspend fun probeAuth(base: String): AuthState = withContext(Dispatchers.IO) {
+        try {
+            rpc(base, "session/list", JSONObject().put("_request", JSONObject()))
+            if (authCookie(base) != null) AuthState.AUTHENTICATED else AuthState.NOT_REQUIRED
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            when {
+                msg.contains("401") -> AuthState.NEEDS_TOKEN
+                else -> AuthState.OFFLINE
+            }
+        }
+    }
 
     /** 打一个 RPC 端点，返回 result.value。失败抛 IOException。 */
     suspend fun rpc(base: String, method: String, args: JSONObject): JSONObject =
@@ -163,6 +333,7 @@ object DshApi {
                 .url("${base.trimEnd('/')}/api/$method")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("ngrok-skip-browser-warning", "true")
+                .withAuth(base)
                 .post(body.toRequestBody(JSON_MEDIA))
                 .build()
 
@@ -717,6 +888,8 @@ object DshApi {
         val req = Request.Builder()
             .url(wsUrl)
             .addHeader("ngrok-skip-browser-warning", "true")
+            // WebSocket 也走 /api 前缀，同样要过认证闸门
+            .withAuth(base)
             .build()
 
         return client.newWebSocket(req, object : WebSocketListener() {

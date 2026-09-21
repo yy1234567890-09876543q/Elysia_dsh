@@ -1,4 +1,4 @@
-﻿package com.example.dshchat
+package com.example.dshchat
 
 import android.app.Application
 import android.app.Notification
@@ -130,6 +130,84 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** 最近用过的工作目录，最新的排最前 */
     var recentCwds by mutableStateOf<List<String>>(emptyList())
         private set
+
+    //#region 认证
+
+    /** 当前地址的认证状态（设置页显示用） */
+    var authState by mutableStateOf(AuthState.UNKNOWN)
+        private set
+
+    /** 上一次认证动作的说明，给界面提示用 */
+    var authHint by mutableStateOf<String?>(null)
+        private set
+
+    /** 探一次当前地址的认证状态 */
+    fun refreshAuth() {
+        viewModelScope.launch {
+            authState = DshApi.probeAuth(serverBase)
+        }
+    }
+
+    /** 忘了这个地址的 cookie（下次请求会吃 401，需要重新粘地址） */
+    fun clearAuth() {
+        DshApi.setAuthCookie(serverBase, null)
+        persistAuthCookies()
+        authState = AuthState.NEEDS_TOKEN
+        authHint = "已清除这张令牌，下次要用得把带 token 的地址重新粘一次哦~"
+        _toast.value = authHint
+    }
+
+    private fun restoreAuthCookies() {
+        val raw = prefs.getString("auth_cookies", null) ?: return
+        val map = HashMap<String, String>()
+        runCatching {
+            val obj = org.json.JSONObject(raw)
+            for (k in obj.keys()) {
+                val v = obj.optString(k, "")
+                if (v.isNotBlank()) map[k] = v
+            }
+        }
+        if (map.isNotEmpty()) DshApi.importCookies(map)
+    }
+
+    private fun persistAuthCookies() {
+        val obj = org.json.JSONObject()
+        for ((k, v) in DshApi.exportCookies()) obj.put(k, v)
+        prefs.edit().putString("auth_cookies", obj.toString()).apply()
+    }
+
+    /**
+     * 用一张启动令牌换 cookie 并落库。
+     * @return 换成功了没有
+     */
+    private suspend fun applyToken(base: String, token: String): Boolean {
+        return when (val r = DshApi.exchangeToken(base, token)) {
+            is TokenExchange.Ok -> {
+                DshApi.setAuthCookie(base, r.cookie)
+                persistAuthCookies()
+                authState = AuthState.AUTHENTICATED
+                authHint = "认证成功~ 这张凭证能用 30 天♪"
+                true
+            }
+            TokenExchange.NoAuthRequired -> {
+                authState = AuthState.NOT_REQUIRED
+                authHint = "这个服务器不要求认证（它只绑了本机，或者装了免认证插件）"
+                true
+            }
+            TokenExchange.Rejected -> {
+                authState = AuthState.NEEDS_TOKEN
+                authHint = "这张令牌服务端不认 —— 多半是 dsh web 重启过，令牌换新的了"
+                false
+            }
+            is TokenExchange.Failed -> {
+                authState = AuthState.OFFLINE
+                authHint = "换令牌失败：${r.message}"
+                false
+            }
+        }
+    }
+
+    //#endregion
 
     /** 正在新建会话（按钮转圈用） */
     private val _creating = MutableStateFlow(false)
@@ -267,6 +345,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() }
             ?: emptyList()
+        // 恢复各地址的认证 cookie（上游的签名密钥跨重启不变，所以这张 cookie 能撑 30 天）
+        restoreAuthCookies()
         // 老版本默认「只在后台提醒」，很多人因此以为铃声坏了 —— 升级时统一放开一次，
         // 想让它在你看 App 时闭嘴，去设置里把那个开关打开就好。
         if (!prefs.getBoolean("notify_bg_migrated", false)) {
@@ -343,17 +423,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     //#region 地址历史
 
-    /** 保存访问地址：当前生效 + 记进历史 */
+    /**
+     * 保存访问地址：当前生效 + 记进历史。
+     *
+     * 如果粘进来的是 `dsh web` 打印的**整条地址**（尾巴带 `?token=`），
+     * 会先拿它换一张 30 天有效的签名 cookie，再把**干净的**地址存下来 ——
+     * 这样历史里不会塞满一次性令牌，认证也不用每次都重来。
+     */
     fun saveBase(url: String) {
-        val trimmed = url.trim()
-        if (trimmed.isEmpty()) return
-        serverBase = trimmed
-        addresses = AddressBook.push(addresses, trimmed)
-        prefs.edit()
-            .putString("server_base", trimmed)
-            .putString("address_book", AddressBook.save(addresses))
-            .apply()
-        loadSessions()
+        val (clean, token) = DshApi.splitTokenUrl(url)
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            if (token != null) {
+                authHint = "正在用令牌换凭证…"
+                applyToken(clean, token)
+            }
+            serverBase = clean
+            addresses = AddressBook.push(addresses, clean)
+            prefs.edit()
+                .putString("server_base", clean)
+                .putString("address_book", AddressBook.save(addresses))
+                .apply()
+            loadSessions()
+            if (token == null) refreshAuth()
+        }
     }
 
     /** 直接切到历史里的某个地址 */
@@ -375,12 +468,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadSessions() {
         viewModelScope.launch {
             try {
-                _sessions.value = DshApi.listSessions(serverBase)
+                val list = DshApi.listSessions(serverBase)
+                _sessions.value = list
+                if (list.isEmpty()) {
+                    // 全新的服务器（或者刚认证完第一次连上）
+                    _messages.value = listOf(
+                        ChatMessage(
+                            newId(), MsgKind.SYSTEM,
+                            "这个服务器上还没有会话，点右上角「＋」建一个吧~♪"
+                        )
+                    )
+                    _hasMore.value = false
+                    return@launch
+                }
+                // 选中的会话不在了（换了服务器、或者被删了）→ 自动落到第一个
+                if (list.none { it.sessionId == _selectedSessionId.value }) {
+                    selectSession(list.first().sessionId)
+                    return@launch
+                }
                 loadHistory()
             } catch (e: Exception) {
-                _messages.update {
-                    it + ChatMessage(newId(), MsgKind.SYSTEM, "⚠️ 拉取会话失败：${e.message}")
+                val msg = e.message.orEmpty()
+                val hint = if (msg.contains("401")) {
+                    "⚠️ 服务器要求认证（401）—— 去设置里把 `dsh web` 打印的整条地址（带 ?token=）粘一次吧"
+                } else {
+                    "⚠️ 拉取会话失败：${e.message}"
                 }
+                _messages.update { it + ChatMessage(newId(), MsgKind.SYSTEM, hint) }
             }
         }
     }

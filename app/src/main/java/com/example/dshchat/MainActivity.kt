@@ -1401,6 +1401,9 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
     var url by remember { mutableStateOf(vm.serverBase) }
     var previewTick by remember { mutableStateOf(0) }
 
+    // 进设置页就顺手探一次认证状态
+    LaunchedEffect(Unit) { vm.refreshAuth() }
+
     // 选壁纸
     val pickWallpaper = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -1494,21 +1497,70 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
                     value = url,
                     onValueChange = { url = it },
                     label = { Text("DSH 服务地址") },
-                    placeholder = { Text("填 ngrok 地址，如 https://xxxx.ngrok-free.dev") },
+                    placeholder = { Text("http://127.0.0.1:3080 或 ngrok 地址") },
                     modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "可以直接把 `dsh web` 打印的整条地址（带 ?token= 的那种）粘进来，" +
+                        "App 会自动换成 30 天有效的凭证，再把干净的地址存好",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         vm.saveBase(url.trim())
-                        Toast.makeText(context, "已保存并连接", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "正在连接…", Toast.LENGTH_SHORT).show()
                     }) { Text("保存并连接") }
-                    TextButton(onClick = { vm.useAddress(url.trim()) }) { Text("重连") }
+                    TextButton(onClick = { vm.refreshAuth() }) { Text("检查认证") }
                 }
                 Text(
                     "当前生效：${vm.serverBase}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline
                 )
+
+                // 认证状态：绿色=已认证，黄色=服务器没开认证（要小心），红色=缺令牌
+                val authDot: String
+                val authLabel: String
+                val authTone: Color
+                when (vm.authState) {
+                    AuthState.AUTHENTICATED -> {
+                        authDot = "🟢"; authLabel = "已认证（凭证 30 天有效）"
+                        authTone = MaterialTheme.colorScheme.primary
+                    }
+                    AuthState.NOT_REQUIRED -> {
+                        authDot = "🟡"; authLabel = "服务器不要求认证 —— 确认它只对本机开放哦"
+                        authTone = Color(0xFFB26A00)
+                    }
+                    AuthState.NEEDS_TOKEN -> {
+                        authDot = "🔴"; authLabel = "需要令牌 —— 把带 ?token= 的地址粘进来"
+                        authTone = MaterialTheme.colorScheme.error
+                    }
+                    AuthState.OFFLINE -> {
+                        authDot = "⚪"; authLabel = "连不上服务器"
+                        authTone = MaterialTheme.colorScheme.outline
+                    }
+                    AuthState.UNKNOWN -> {
+                        authDot = "⚪"; authLabel = "还没检查"
+                        authTone = MaterialTheme.colorScheme.outline
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$authDot $authLabel",
+                        fontSize = 12.sp,
+                        color = authTone,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (vm.authState == AuthState.AUTHENTICATED) {
+                        TextButton(onClick = { vm.clearAuth() }) {
+                            Text("清除令牌", fontSize = 11.sp)
+                        }
+                    }
+                }
+                vm.authHint?.let {
+                    Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                }
             }
 
             // ---------- 地址历史 ----------

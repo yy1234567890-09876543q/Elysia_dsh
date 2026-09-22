@@ -1392,6 +1392,88 @@ private fun parseInline(s: String, onColor: Color, weight: FontWeight): Annotate
 
 //#region 设置页
 
+// 局域网直连（dsh-mobile 网关 + 配对密钥）暂时对用户隐藏 ——
+// 现在推荐的连接方式只有 ngrok 隧道那一种（见 README「三、连上它」）。
+// 想重新开出来：把这里改成 true 即可，下面的配对区块和 ViewModel 里的逻辑都还在。
+private const val SHOW_LAN_DIRECT = false
+
+/**
+ * 「局域网直连」配对区块（配合电脑上的 dsh-mobile 插件）。
+ * 目前由 [SHOW_LAN_DIRECT] 关着，界面上不显示。
+ */
+@Composable
+private fun LanDirectSection(vm: ChatViewModel) {
+    // 配对输入：电脑的局域网 IP + 从 DSH 那边复制来的配对密钥
+    var lanHost by remember {
+        mutableStateOf(vm.lanOrigin?.removePrefix("https://")?.substringBefore(':') ?: "")
+    }
+    var lanKey by remember { mutableStateOf("") }
+
+    Section("局域网直连（不用数据线）") {
+        Text(
+            "在电脑上打开 DSH 左下角「移动访问 → 局域网」，点「生成并复制密钥」，" +
+                "把密钥粘到下面，再填上电脑的局域网 IP（如 192.168.1.3），就能连上啦",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = lanHost,
+            onValueChange = { lanHost = it },
+            label = { Text("电脑地址", fontSize = 13.sp) },
+            placeholder = { Text("192.168.1.3", fontSize = 12.sp) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = lanKey,
+            onValueChange = { lanKey = it },
+            label = { Text("配对密钥", fontSize = 13.sp) },
+            placeholder = { Text("dsh1.……", fontSize = 12.sp) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TextButton(
+                enabled = !vm.lanWorking,
+                onClick = {
+                    vm.pairLan(lanKey, lanHost)
+                    lanKey = ""
+                }
+            ) {
+                if (vm.lanWorking) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("配对并连接")
+                }
+            }
+            TextButton(
+                enabled = vm.lanOrigin != null && !vm.lanWorking,
+                onClick = { vm.forgetLan() }
+            ) { Text("忘掉这台电脑") }
+        }
+        Text(
+            (if (vm.lanOrigin != null) "🟢 " else "⚪ ") + vm.lanStatus,
+            fontSize = 12.sp,
+            color = if (vm.lanOrigin != null) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outline
+        )
+        if (vm.lanDeviceExpiresAt > 0L) {
+            Text(
+                "配对有效期至 " + formatTime(vm.lanDeviceExpiresAt),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
@@ -1407,12 +1489,6 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
     var tokenInput by remember { mutableStateOf("") }
     var urlVisible by remember { mutableStateOf(false) }
     var tokenVisible by remember { mutableStateOf(false) }
-
-    // 局域网直连（dsh-mobile 网关）的配对输入
-    var lanHost by remember {
-        mutableStateOf(vm.lanOrigin?.removePrefix("https://")?.substringBefore(':') ?: "")
-    }
-    var lanKey by remember { mutableStateOf("") }
 
     // 进设置页就顺手探一次认证状态
     LaunchedEffect(Unit) { vm.refreshAuth() }
@@ -1603,70 +1679,8 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
                 }
             }
 
-            // ---------- 局域网直连（不用数据线）----------
-            Section("局域网直连（不用数据线）") {
-                Text(
-                    "在电脑上打开 DSH 左下角「移动访问 → 局域网」，点「生成并复制密钥」，" +
-                        "把密钥粘到下面，再填上电脑的局域网 IP（如 192.168.1.3），就能连上啦",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = lanHost,
-                    onValueChange = { lanHost = it },
-                    label = { Text("电脑地址", fontSize = 13.sp) },
-                    placeholder = { Text("192.168.1.3", fontSize = 12.sp) },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = lanKey,
-                    onValueChange = { lanKey = it },
-                    label = { Text("配对密钥", fontSize = 13.sp) },
-                    placeholder = { Text("dsh1.……", fontSize = 12.sp) },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(
-                        enabled = !vm.lanWorking,
-                        onClick = {
-                            vm.pairLan(lanKey, lanHost)
-                            lanKey = ""
-                        }
-                    ) {
-                        if (vm.lanWorking) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("配对并连接")
-                        }
-                    }
-                    TextButton(
-                        enabled = vm.lanOrigin != null && !vm.lanWorking,
-                        onClick = { vm.forgetLan() }
-                    ) { Text("忘掉这台电脑") }
-                }
-                Text(
-                    (if (vm.lanOrigin != null) "🟢 " else "⚪ ") + vm.lanStatus,
-                    fontSize = 12.sp,
-                    color = if (vm.lanOrigin != null) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline
-                )
-                if (vm.lanDeviceExpiresAt > 0L) {
-                    Text(
-                        "配对有效期至 " + formatTime(vm.lanDeviceExpiresAt),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
+            // ---------- 局域网直连：目前对用户隐藏，见 SHOW_LAN_DIRECT ----------
+            if (SHOW_LAN_DIRECT) LanDirectSection(vm)
 
             // ---------- 地址历史 ----------
             Section("访问历史（点一下直接切过去）") {

@@ -6,7 +6,7 @@ echo ========================================
 echo.
 echo 1. Open https://dashboard.ngrok.com/get-started/your-authtoken
 echo 2. Copy your token
-echo 3. Paste below and press Enter
+echo 3. Right-click in this window to paste it, then press Enter
 echo.
 set /p TOKEN="Paste your authtoken: "
 
@@ -25,6 +25,6 @@ echo     authtoken: %TOKEN%
 echo.
 echo ========================================
 echo   Done! ngrok.yml saved.
-echo   Now run "StartTunnel.bat"
+echo   Next: double-click the tunnel .bat in this folder.
 echo ========================================
 pause
